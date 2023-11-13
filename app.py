@@ -3,6 +3,28 @@ import cv2
 import dlib
 import numpy as np
 import mysql.connector
+from confluent_kafka import Producer
+
+conf = {
+    'bootstrap.servers': 'localhost:9092',
+    'client.id': 'webcam_face_detection_producer'
+}
+
+producer = Producer(conf)
+
+def produce_kafka_message(message):
+    try:
+        topic = 'FACE_MATCHED'
+
+        if not isinstance(message, str):
+            message = str(message)
+
+        message_bytes = message.encode('utf-8')
+        producer.produce(topic, key=None, value=message_bytes)
+        producer.flush()
+
+    except Exception as e:
+        print(f"Erro ao produzir mensagem no Kafka: {e}")
 
 def connect_to_database():
     return mysql.connector.connect(
@@ -80,12 +102,8 @@ def main():
 
                         threshold = 20
                         if distance < threshold:
-                            found_similar_face = True
-                            print(f"Rosto na webcam é parecido com {user[0]} (Distância: {distance})")
-
-                            combined_image = np.concatenate((frame_resized, image), axis=1)
-                            cv2.imshow('Webcam vs. Image', combined_image)
-                            cv2.waitKey(0)
+                            message = user[0]
+                            produce_kafka_message(message)
 
             if not found_similar_face:
                 cv2.imshow('Webcam Face Detection', frame)
