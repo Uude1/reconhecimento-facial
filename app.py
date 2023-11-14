@@ -2,8 +2,8 @@ import base64
 import cv2
 import dlib
 import numpy as np
-import mysql.connector
 from confluent_kafka import Producer
+import requests
 
 conf = {
     'bootstrap.servers': 'localhost:9092',
@@ -11,6 +11,8 @@ conf = {
 }
 
 producer = Producer(conf)
+
+user_data = []
 
 def produce_kafka_message(message):
     try:
@@ -26,27 +28,26 @@ def produce_kafka_message(message):
     except Exception as e:
         print(f"Erro ao produzir mensagem no Kafka: {e}")
 
-def connect_to_database():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root",
-        database="ifmatch"
-    )
-
-def get_user_data(connection):
-    cursor = connection.cursor()
-    cursor.execute("SELECT * FROM user")
-    return cursor.fetchall()
+def get_user_data():
+    try:
+        response = requests.get('http://localhost:8080/user')
+        if response.status_code == 200:
+            user_data = response.json()
+            return user_data
+        else:
+            print(f"Erro na solicitação HTTP GET: Status Code {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"Erro na solicitação HTTP GET: {e}")
+        return []
 
 def load_image_from_user_data(user_data):
-    image_data = base64.b64decode(user_data[4])
+    image_data = base64.b64decode(user_data['profileImg'])
     nparr = np.frombuffer(image_data, np.uint8)
     return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
 def main():
-    connection = connect_to_database()
-    user_data = get_user_data(connection)
+    user_data = get_user_data()
 
     cap = cv2.VideoCapture(0)
 
@@ -102,7 +103,7 @@ def main():
 
                         threshold = 20
                         if distance < threshold:
-                            message = user[0]
+                            message = user['idUser']
                             produce_kafka_message(message)
 
             if not found_similar_face:
