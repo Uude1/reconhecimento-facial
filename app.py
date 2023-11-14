@@ -1,18 +1,41 @@
 import base64
+import sys
+import threading
+
 import cv2
 import dlib
 import numpy as np
-from confluent_kafka import Producer
+from confluent_kafka import Producer, Consumer
 import requests
 
 conf = {
     'bootstrap.servers': 'localhost:9092',
-    'client.id': 'webcam_face_detection_producer'
+    'group.id': 'webcam_face_detection_consumer',
+    'auto.offset.reset': 'earliest'
 }
 
 producer = Producer(conf)
+global user_data
 
-user_data = []
+
+def consume_kafka_messages():
+    topics = ['NEW_USER']
+    c = Consumer(conf)
+    c.subscribe(topics)
+    try:
+        while True:
+            msg = c.poll(timeout=1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                print(msg.error)
+            else:
+                global user_data
+                user_data = get_user_data()
+    except KeyboardInterrupt:
+        sys.stderr.write('%% Aborted by user\n')
+    c.close()
+
 
 def produce_kafka_message(message):
     try:
@@ -28,6 +51,7 @@ def produce_kafka_message(message):
     except Exception as e:
         print(f"Erro ao produzir mensagem no Kafka: {e}")
 
+
 def get_user_data():
     try:
         response = requests.get('http://localhost:8080/user')
@@ -41,13 +65,20 @@ def get_user_data():
         print(f"Erro na solicitação HTTP GET: {e}")
         return []
 
+
 def load_image_from_user_data(user_data):
     image_data = base64.b64decode(user_data['profileImg'])
     nparr = np.frombuffer(image_data, np.uint8)
     return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
+
 def main():
+    global user_data
     user_data = get_user_data()
+
+    if not user_data:
+        print("Não foi possível obter os dados do usuário.")
+        return
 
     cap = cv2.VideoCapture(0)
 
@@ -77,7 +108,7 @@ def main():
                 point.x, point.y = int(x), int(y)
 
             x, y, w, h = face.left(), face.top(), face.width(), face.height()
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
             found_similar_face = False
 
@@ -85,8 +116,6 @@ def main():
                 for user in user_data:
                     image = load_image_from_user_data(user)
                     gray_img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-                    frame_resized = cv2.resize(frame, (int(frame.shape[1] * image.shape[0] / frame.shape[0]), image.shape[0]))
 
                     img_faces = detector(gray_img, 0)
 
@@ -99,7 +128,8 @@ def main():
                             x, y = point.x * original_width / image.shape[1], point.y * original_height / image.shape[0]
                             point.x, point.y = int(x), int(y)
 
-                        distance = np.mean([np.linalg.norm(np.array((x1.x - x2.x, x1.y - x2.y))) for x1, x2 in zip(webcam_face_landmarks, img_face_landmarks)])
+                        distance = np.mean([np.linalg.norm(np.array((x1.x - x2.x, x1.y - x2.y))) for x1, x2 in
+                                            zip(webcam_face_landmarks, img_face_landmarks)])
 
                         threshold = 20
                         if distance < threshold:
@@ -115,5 +145,15 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
 
+
 if __name__ == "__main__":
-    main()
+    kafka_consumer_thread = threading.Thread(target=consume_kafka_messages)
+    main_thread = threading.Thread(target=main)
+
+    # Inicie as threads
+    kafka_consumer_thread.start()
+    main_thread.start()
+
+    # Aguarde até que ambas as threads terminem
+    kafka_consumer_thread.join()
+    main_thread.join()
