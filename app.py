@@ -110,8 +110,6 @@ def main():
             x, y, w, h = face.left(), face.top(), face.width(), face.height()
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
-            found_similar_face = False
-
             if webcam_face_landmarks is not None:
                 for user in user_data:
                     image = load_image_from_user_data(user)
@@ -135,9 +133,10 @@ def main():
                         if distance < threshold:
                             message = user['idUser']
                             produce_kafka_message(message)
+                            mensagem = "Rosto reconhecido!"
+                            cv2.putText(frame, mensagem, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            if not found_similar_face:
-                cv2.imshow('Webcam Face Detection', frame)
+                        cv2.imshow('Webcam Face Detection', frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
