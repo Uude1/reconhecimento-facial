@@ -1,68 +1,48 @@
 import base64
-import sys
-import threading
-
 import cv2
 import dlib
 import numpy as np
-from confluent_kafka import Producer, Consumer
 import requests
 
-conf = {
-    'bootstrap.servers': 'localhost:9092',
-    'group.id': 'webcam_face_detection_consumer',
-    'auto.offset.reset': 'earliest'
-}
-
-producer = Producer(conf)
-global user_data
-
-
-def consume_kafka_messages():
-    topics = ['NEW_USER']
-    c = Consumer(conf)
-    c.subscribe(topics)
+def verify_need_update_user_list():
     try:
-        while True:
-            msg = c.poll(timeout=1.0)
-            if msg is None:
-                continue
-            if msg.error():
-                print(msg.error)
-            else:
-                global user_data
-                user_data = get_user_data()
-    except KeyboardInterrupt:
-        sys.stderr.write('%% Aborted by user\n')
-    c.close()
-
-
-def produce_kafka_message(message):
-    try:
-        topic = 'FACE_MATCHED'
-
-        if not isinstance(message, str):
-            message = str(message)
-
-        message_bytes = message.encode('utf-8')
-        producer.produce(topic, key=None, value=message_bytes)
-        producer.flush()
-
+        response = requests.get('https://ifmatch-api.onrender.com/conf/need-update-users')
+        if response.status_code == 200:
+            if response.json():
+                disable_flag_conf_update_users()
+                return True
+        else:
+            print(f"Erro na chamada verify_need_update_user_list")
+            return False
     except Exception as e:
-        print(f"Erro ao produzir mensagem no Kafka: {e}")
+        print(f"Erro ao chamar verify_need_update_user_list")
+        return False
 
+    return False
+
+def disable_flag_conf_update_users():
+    try:
+        response = requests.put('https://ifmatch-api.onrender.com/conf/false')
+        if response.status_code == 200:
+            print(f"disable_flag_conf_update_users OK")
+        else:
+            print(f"Erro na chamada disable_flag_conf_update_users")
+            return []
+    except Exception as e:
+        print(f"Erro ao chamar disable_flag_conf_update_users")
+        return []
 
 def get_user_data():
     try:
-        response = requests.get('http://localhost:8080/user')
+        response = requests.get('https://ifmatch-api.onrender.com/user')
         if response.status_code == 200:
             user_data = response.json()
             return user_data
         else:
-            print(f"Erro na solicitação HTTP GET: Status Code {response.status_code}")
+            print(f"Erro na chamada get_user_data")
             return []
     except Exception as e:
-        print(f"Erro na solicitação HTTP GET: {e}")
+        print(f"Erro ao chamar get_user_data")
         return []
 
 
@@ -71,9 +51,23 @@ def load_image_from_user_data(user_data):
     nparr = np.frombuffer(image_data, np.uint8)
     return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
+def change_user_status(frame, user_id):
+    try:
+        mensagem = "Rosto reconhecido!"
+        cv2.putText(frame, mensagem, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0),
+                    2)
+        response = requests.get(
+            'https://ifmatch-api.onrender.com/user/change-status/' + user_id + '/AGUARDANDO_ATENDIMENTO')
+        if response.status_code == 200:
+            get_user_data()
+        else:
+            print(f"Erro na chamada change_user_status")
+            return []
+    except Exception as e:
+        print(f"Erro ao chamar change_user_status")
+        return []
 
 def main():
-    global user_data
     user_data = get_user_data()
 
     if not user_data:
@@ -92,6 +86,9 @@ def main():
     cv2.resizeWindow('Webcam Face Detection', original_width, original_height)
 
     while True:
+        if verify_need_update_user_list():
+            user_data = get_user_data()
+
         ret, frame = cap.read()
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -131,10 +128,7 @@ def main():
 
                         threshold = 20
                         if distance < threshold:
-                            message = user['idUser']
-                            produce_kafka_message(message)
-                            mensagem = "Rosto reconhecido!"
-                            cv2.putText(frame, mensagem, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            change_user_status(frame, str(user['idUser']))
 
                         cv2.imshow('Webcam Face Detection', frame)
 
@@ -144,15 +138,5 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
 
-
 if __name__ == "__main__":
-    kafka_consumer_thread = threading.Thread(target=consume_kafka_messages)
-    main_thread = threading.Thread(target=main)
-
-    # Inicie as threads
-    kafka_consumer_thread.start()
-    main_thread.start()
-
-    # Aguarde até que ambas as threads terminem
-    kafka_consumer_thread.join()
-    main_thread.join()
+    main()
